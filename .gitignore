@@ -1,0 +1,7 @@
+modsync*.toml
+.env
+
+**/target
+**/config
+**/mods
+**/uploads

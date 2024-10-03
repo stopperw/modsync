@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE files SET path = $1, state = $2, hash = $3, updated_at = now() WHERE id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "204ea01cc54b2698088b78f91c99e3d63f60b38a8b3e224b37ddb12324e404a6"
+}

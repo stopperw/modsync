@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE files SET updated_at = now(), uploaded = $1, hash = $2, sync_version = sync_version + 1 WHERE id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "475bfffdac2698f67814407089b913c5f688ed5f22873a6845aa85743e86386e"
+}

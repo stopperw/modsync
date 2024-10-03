@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO FILES (id, modpack, created_at, updated_at, path, state, sync_version, hash, uploaded)\n            VALUES ($1, $2, now(), now(), $3, $4, 0, $5, false)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2e40ac91d86718e32b87c828c9fbb6efafab1bc06993764246338c3dd00effb4"
+}

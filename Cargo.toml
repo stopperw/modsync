@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = [
+	"modsync_core",   # Common
+	"modsync_server", # Server
+	"modsync_cli",    # Admin CLI
+	"modsync_client"  # Sync client
+]

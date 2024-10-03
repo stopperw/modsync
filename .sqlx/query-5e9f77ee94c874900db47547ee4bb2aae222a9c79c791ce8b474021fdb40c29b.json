@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO modpacks\n        (id, name, game, game_version, modloader, modloader_version, sync_version) VALUES\n        ($1, $2, $3, $4, $5, $6, 0)\n    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5e9f77ee94c874900db47547ee4bb2aae222a9c79c791ce8b474021fdb40c29b"
+}
