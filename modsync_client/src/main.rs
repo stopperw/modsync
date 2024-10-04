@@ -20,6 +20,9 @@ use futures_util::StreamExt;
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    /// Game directory to sync
+    target_directory: Option<String>,
+
     /// Force check all mods for mismatches
     #[arg(short = 'f', long)]
     force_check: bool,
@@ -70,6 +73,8 @@ async fn run() -> anyhow::Result<()> {
     }
     pretty_env_logger::init();
     let args = Args::parse();
+    let target_directory = args.target_directory.unwrap_or(".".to_string());
+    let base = Path::new(&target_directory);
 
     info!(
         "{}",
@@ -80,7 +85,7 @@ async fn run() -> anyhow::Result<()> {
         .red()
     );
 
-    let config_string = tokio::fs::read_to_string("modsync.toml")
+    let config_string = tokio::fs::read_to_string(base.join("modsync.toml"))
         .await
         .map_err(|_| anyhow::anyhow!("No modsync.toml found!"))?;
     let mut config: Config = toml::from_str(&config_string)?;
@@ -105,27 +110,29 @@ async fn run() -> anyhow::Result<()> {
         .italic()
     );
 
+    let mut synced_files = 0;
     for (path, sync_file) in modpack.files.iter().map(|x| (x.path.clone(), x)) {
         if sync_file.state == FileState::Ignored {
             continue;
         }
-        info!("Synchronizing {}...", path.blue());
         if !config.files.contains_key(&path) {
             config
                 .files
                 .insert(path.clone(), FileInfo::new(sync_file.sync_version, None));
         }
-        let file_info = config.files.get_mut(&path).unwrap();
-        if file_info.disable_sync.unwrap_or(false) {
+        let saved_state = config.files.get_mut(&path).unwrap();
+        if saved_state.disable_sync.unwrap_or(false) {
             continue;
         }
-        file_info.hash = sync_file.hash.clone();
-        let file_hash = sync_file.hash.clone().unwrap_or("".to_string());
-        let file = File::open(&path);
+        info!("Synchronizing {}...", path.blue());
+        synced_files += 1;
+        saved_state.hash = sync_file.hash.clone();
+        let server_hash = sync_file.hash.clone().unwrap_or("".to_string());
+        let file = File::open(base.join(&path));
         if let Ok(mut file) = file {
             if sync_file.state == FileState::Exists
-                && (file_info.dirty
-                    || sync_file.sync_version > file_info.sync_version
+                && (saved_state.dirty
+                    || sync_file.sync_version > saved_state.sync_version
                     || args.force_check)
             {
                 // Verify file's hash and redownload if needed
@@ -142,18 +149,18 @@ async fn run() -> anyhow::Result<()> {
                     .collect::<Vec<String>>()
                     .join("");
 
-                if file_hash != hash_str {
+                if server_hash != hash_str {
                     info!(
                         "[{}] {} was updated, redownloading...",
                         "#".yellow(),
                         path.yellow()
                     );
-                    download_file(&client, &config.server_url, &file_hash, &path).await?;
+                    download_file(&client, &config.server_url, &server_hash, &base.join(&path)).await?;
                     info!("[{}] {} redownloaded!", "#".green(), path.green());
                 }
             } else if sync_file.state == FileState::Deleted {
                 // Remove the file
-                std::fs::remove_file(&path)?;
+                std::fs::remove_file(base.join(&path))?;
                 info!("[{}] {} is removed.", "-".red(), path.red());
             }
         } else if sync_file.state == FileState::Exists {
@@ -163,15 +170,19 @@ async fn run() -> anyhow::Result<()> {
                 "+".green(),
                 path.green()
             );
-            download_file(&client, &config.server_url, &file_hash, &path).await?;
+            download_file(&client, &config.server_url, &server_hash, &base.join(&path)).await?;
             info!("[{}] {} downloaded!", "+".green(), path.green());
         }
-        file_info.sync_version = sync_file.sync_version;
-        file_info.dirty = false;
+        saved_state.sync_version = sync_file.sync_version;
+        saved_state.dirty = false;
+    }
+
+    if synced_files == 0 {
+        info!("[{}] No files required synchronization! You can force resync everything using the --force-check (-f) flag.", "W".yellow());
     }
 
     let config_string = toml::to_string(&config)?;
-    tokio::fs::write("modsync.toml", config_string.as_bytes()).await?;
+    tokio::fs::write(base.join("modsync.toml"), config_string.as_bytes()).await?;
 
     info!("{}", "Sync complete! Have fun.".green());
 

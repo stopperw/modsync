@@ -1,4 +1,4 @@
-use std::{env::var, sync::Arc, time::Duration};
+use std::{env::var, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
     async_trait,
@@ -19,7 +19,7 @@ use error::ApiError;
 use models::modpacks::Modpack;
 use modsync_core::{
     api::{
-        FileId, FileSyncBody, FileSyncResponse, HelloResponse, ModpackCreateBody,
+        FileSyncBody, FileSyncResponse, FileUploadResponse, HelloResponse, ModpackCreateBody,
         ModpackCreateResponse, ModpackId, ModpackResponse,
     },
     StrConversion,
@@ -49,6 +49,7 @@ pub struct ServerConfigFile {
     pub master_key: Option<String>,
     pub port: Option<String>,
     pub uploads_directory: Option<String>,
+    pub file_size_limit: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -57,6 +58,7 @@ pub struct ServerConfig {
     pub master_key: String,
     pub port: u16,
     pub uploads_directory: String,
+    pub file_size_limit: usize,
 }
 
 pub struct AppState {
@@ -102,6 +104,10 @@ impl ServeCommand {
                     .as_ref()
                     .and_then(|x| x.uploads_directory.clone()))
                 .unwrap_or("uploads".to_string()),
+            file_size_limit: server_config_file
+                .as_ref()
+                .and_then(|x| x.file_size_limit.clone())
+                .unwrap_or(262144000),
         };
 
         let pool = PgPoolOptions::new()
@@ -110,6 +116,10 @@ impl ServeCommand {
             .await?;
 
         sqlx::migrate!().run(&pool).await?;
+
+        if !std::fs::exists(&config.uploads_directory)? {
+            create_directories(&config.uploads_directory)?;
+        }
 
         let state = Arc::new(AppState {
             pool,
@@ -134,9 +144,7 @@ impl ServeCommand {
                 get(dl_file_hash).layer(CompressionLayer::new()),
             )
             .layer(DefaultBodyLimit::disable())
-            .layer(RequestBodyLimitLayer::new(
-                250 * 1024 * 1024, /* 250mb */
-            ))
+            .layer(RequestBodyLimitLayer::new(config.file_size_limit))
             .layer(TimeoutLayer::new(Duration::from_secs(15)))
             .layer(TraceLayer::new_for_http())
             .with_state(state);
@@ -227,18 +235,6 @@ pub struct FileUploadQuery {
     pub file_path: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum FileUploadAction {
-    Uploaded,
-    Exists,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct FileUploadResponse {
-    pub action: FileUploadAction,
-    pub file_id: Option<FileId>,
-}
-
 async fn dl_file_hash(
     State(state): State<Arc<AppState>>,
     Path(upload_hash): Path<String>,
@@ -266,10 +262,10 @@ async fn dl_file_upload(
     mut multipart: Multipart,
 ) -> Result<Json<FileUploadResponse>, ApiError> {
     let existing_file =
-        models::files::File::get_by_path(&modpack_id, &query.file_path, &state.pool).await?;
-    if existing_file.is_none() {
-        return Err(ApiError::NotFound);
-    }
+        match models::files::File::get_by_path(&modpack_id, &query.file_path, &state.pool).await? {
+            Some(file) => file,
+            None => return Err(ApiError::NotFound),
+        };
 
     if let Some(field) = multipart.next_field().await? {
         let data = field.bytes().await?;
@@ -279,41 +275,26 @@ async fn dl_file_upload(
         hasher.update(&data);
         let hash = hasher.finalize();
         // FIXME: doesn't sound efficient tbf
-        let hash_str = hash
+        let hash_str: String = hash
             .into_iter()
             .map(|x| format!("{:02x}", x))
             .collect::<Vec<String>>()
             .join("");
 
-        let uploaded_file = models::files::File::get_by_hash(&hash_str, &state.pool).await?;
-        if let Some(file) = uploaded_file {
-            if std::fs::exists(std::path::Path::new(&state.config.uploads_directory).join(&hash_str))? {
-                return Ok(Json(FileUploadResponse {
-                    action: FileUploadAction::Exists,
-                    file_id: Some(file.id),
-                }));
-            }
-        }
-
-        if let Some(existing_file) = existing_file {
+        if !std::fs::exists(std::path::Path::new(&state.config.uploads_directory).join(&hash_str))?
+        {
             let mut file =
                 File::create(std::path::Path::new(&state.config.uploads_directory).join(&hash_str))
                     .await?;
             file.write_all(&data).await?;
-            models::files::File::set_uploaded(
-                &existing_file.id,
-                true,
-                Some(&hash_str),
-                &state.pool,
-            )
-            .await?;
-            return Ok(Json(FileUploadResponse {
-                action: FileUploadAction::Uploaded,
-                file_id: Some(existing_file.id),
-            }));
-        } else {
-            return Err(ApiError::NotFound);
         }
+
+        models::files::File::set_uploaded(&existing_file.id, true, Some(&hash_str), &state.pool)
+            .await?;
+
+        return Ok(Json(FileUploadResponse {
+            file_id: existing_file.id,
+        }));
     }
     Err(ApiError::BadRequest)
 }
@@ -392,4 +373,21 @@ where
         }
         Ok(AuthenticatedKey(state.master_key.clone()))
     }
+}
+
+pub fn create_directories<P>(path: P) -> Result<(), std::io::Error>
+where
+    P: AsRef<std::path::Path>,
+{
+    let path = path.as_ref();
+    let components = path.components();
+    let mut new_path_components: Vec<std::path::Component> = Vec::new();
+    for a in components {
+        new_path_components.push(a);
+        let new_path = new_path_components.iter().collect::<PathBuf>();
+        if !std::fs::exists(&new_path)? {
+            std::fs::create_dir(new_path)?;
+        }
+    }
+    Ok(())
 }

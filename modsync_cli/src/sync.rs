@@ -14,7 +14,7 @@ use globset::{Glob, GlobSetBuilder};
 use ignore::gitignore::GitignoreBuilder;
 use log::{error, info};
 use modsync_core::{
-    api::{FileSyncBody, FileSyncResponse},
+    api::{FileSyncBody, FileSyncResponse, ModpackResponse},
     FileState,
 };
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,7 @@ use walkdir::WalkDir;
 /// Command to sync local mods to the server
 #[derive(Args, Debug)]
 pub struct SyncCommand {
-    /// .minecraft directory to sync
+    /// Game directory to sync
     target_directory: Option<String>,
 
     /// Force sync all mods, instead of only changes
@@ -137,7 +137,10 @@ impl SyncCommand {
                 Some(reqwest::StatusCode::UNAUTHORIZED) => anyhow!("Invalid API key"),
                 _ => x.into(),
             })?;
-        info!("Server ({}) authentication successful! Starting synchronization...", config.server_url);
+        info!(
+            "Server ({}) authentication successful! Starting synchronization...",
+            config.server_url
+        );
 
         let instant = Instant::now();
 
@@ -156,8 +159,32 @@ impl SyncCommand {
         let excludes = builder.build()?;
 
         let mut state = if self.download_state {
-            // TODO: download state
-            SyncState::new()
+            let modpack: ModpackResponse = client
+                .get(format!(
+                    "{}/modpack/{}",
+                    config.server_url, config.modpack_id
+                ))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            let mut files: HashMap<String, SyncFile> = HashMap::new();
+            for (path, sync_file) in modpack.files.into_iter().map(|x| (x.path.clone(), x)) {
+                files.insert(
+                    path,
+                    SyncFile {
+                        hash: sync_file.hash,
+                        state: sync_file.state,
+                        dirty: FileDirtyness::Updated,
+                    },
+                );
+            }
+            SyncState {
+                upload_version: 0,
+                state_version: 0,
+                files,
+            }
         } else {
             let state_file = File::open(target_path.join("modsync.state.toml"));
             if let Ok(mut state_file) = state_file {
@@ -191,7 +218,11 @@ impl SyncCommand {
             let sync_file = state.files.get_mut(path_str);
             match sync_file {
                 Some(sync_file) => {
-                    info!("[{}] Checking file {} for changes...", "/".cyan(), path_str.cyan());
+                    info!(
+                        "[{}] Checking file {} for changes...",
+                        "/".cyan(),
+                        path_str.cyan()
+                    );
 
                     // Hashing
                     let mut hasher = Sha256::new();
@@ -347,4 +378,3 @@ where
         }
     }
 }
-

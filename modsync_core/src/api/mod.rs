@@ -41,6 +41,12 @@ pub struct FileSyncBody {
 #[derive(Serialize, Deserialize)]
 pub struct FileSyncResponse {}
 
+// File upload
+#[derive(Serialize, Deserialize)]
+pub struct FileUploadResponse {
+    pub file_id: FileId,
+}
+
 // Modpack Create
 #[derive(Serialize, Deserialize)]
 pub struct ModpackCreateBody {
